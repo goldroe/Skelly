@@ -288,6 +288,7 @@ read_file(std::string file_name) {
         if (GetFileSizeEx(file_handle, (PLARGE_INTEGER)&bytes_to_read)) {
             assert(bytes_to_read <= UINT32_MAX);
             char *buffer = new char[bytes_to_read + 1];
+            buffer[bytes_to_read] = 0;
             DWORD bytes_read;
             if (ReadFile(file_handle, buffer, (DWORD)bytes_to_read, &bytes_read, NULL) && (DWORD)bytes_to_read ==  bytes_read) {
                 result = std::string(buffer);
@@ -397,8 +398,9 @@ int main() {
         D3D11_RASTERIZER_DESC desc{};
         desc.FillMode = D3D11_FILL_SOLID;
         desc.CullMode = D3D11_CULL_NONE;
-        desc.ScissorEnable = true;
-        desc.DepthClipEnable = true;
+        desc.FrontCounterClockwise = true;
+        desc.ScissorEnable = false;
+        desc.DepthClipEnable = false;
         d3d_device->CreateRasterizerState(&desc, &rasterizer_state);
     }
 
@@ -493,13 +495,13 @@ int main() {
         }
 
         // NOTE: Load bone datat
-        for (u32 bone_index = 0; bone_index < ai_mesh->mNumBones; bone_index++) {
-            aiBone *bone = ai_mesh->mBones[bone_index];
-            for (u32 vertex_index = 0; vertex_index < bone->mNumWeights; vertex_index++) {
-                aiVertexWeight weight = bone->mWeights[vertex_index];
-                mesh.vertices[weight.mVertexId].bone_weights[0] = weight.mWeight;
-            }
-        }
+        // for (u32 bone_index = 0; bone_index < ai_mesh->mNumBones; bone_index++) {
+        //     aiBone *bone = ai_mesh->mBones[bone_index];
+        //     for (u32 vertex_index = 0; vertex_index < bone->mNumWeights; vertex_index++) {
+        //         aiVertexWeight weight = bone->mWeights[vertex_index];
+        //         // mesh.vertices[weight.mVertexId].bone_weights[0] = weight.mWeight;
+        //     }
+        // }
 
         for (u32 i = 0; i < ai_mesh->mNumFaces; i++) {
             aiFace *face = ai_mesh->mFaces + i;
@@ -670,15 +672,14 @@ int main() {
         d3d_context->RSSetState(rasterizer_state);
 
         d3d_context->OMSetBlendState(blend_state, NULL, 0xffffffff);
-        d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
+        // d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
 
         HMM_Mat4 view = camera.view_matrix;
         HMM_Mat4 trans = HMM_Translate(camera.position);
         HMM_Mat4 mvp = projection * view;
 
         model_constants.mvp = mvp;
-        // model_constants.color = HMM_V4(1.0f, 0.0f, 0.0f, 1.0f);
-        model_constants.color = HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
+        model_constants.color = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
 
         upload_constants(model_program.constant_buffer, &model_constants, sizeof(model_constants));
 

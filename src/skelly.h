@@ -36,8 +36,8 @@ struct Vertex {
     HMM_Vec2 uv;
 
     // Bone
-    int bone_ids[MAX_BONES];
-    f32 bone_weights[MAX_BONES];
+    // int bone_ids[MAX_BONES];
+    // f32 bone_weights[MAX_BONES];
 };
 
 struct Mesh {
