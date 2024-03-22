@@ -28,34 +28,58 @@ struct Shader_Program {
     ID3D11Buffer *constant_buffer;
 };
 
-#define MAX_BONES 4
+struct Basic_Constants {
+    HMM_Mat4 wvp;
+    HMM_Vec4 color;
+};
 
-struct Vertex {
+struct Basic_Vertex {
     HMM_Vec3 position;
     HMM_Vec3 normal;
     HMM_Vec2 uv;
-
-    // Bone
-    // int bone_ids[MAX_BONES];
-    // f32 bone_weights[MAX_BONES];
 };
 
-struct Mesh {
-    std::vector<Vertex> vertices;
+struct Basic_Mesh {
+    std::vector<Basic_Vertex> vertices;
     std::vector<u32> indices;
     ID3D11Buffer *vertex_buffer;
     ID3D11Buffer *index_buffer;
     Texture texture;
 };
 
-struct Model {
-    std::vector<Mesh*> meshes;
+struct Basic_Model {
+    std::vector<Basic_Mesh*> meshes;
     Texture diffuse_texture;
 };
 
-struct Model_Constants {
-    HMM_Mat4 mvp;
+#define MAX_BONES 100
+#define MAX_BONE_INFLUENCE 4
+
+struct Skinned_Constants {
+    HMM_Mat4 wvp;
+    HMM_Mat4 bone_matrices[MAX_BONES];
     HMM_Vec4 color;
+};
+
+struct Skinned_Vertex {
+    HMM_Vec3 position;
+    HMM_Vec3 normal;
+    HMM_Vec2 uv;
+    u32 bone_ids[MAX_BONE_INFLUENCE];
+    f32 bone_weights[MAX_BONES];
+};
+
+struct Skinned_Mesh {
+    std::vector<Skinned_Vertex> vertices;
+    std::vector<u32> indices;
+    ID3D11Buffer *vertex_buffer;
+    ID3D11Buffer *index_buffer;
+    Texture texture;
+};
+
+struct Skinned_Model {
+    std::vector<Skinned_Mesh*> meshes;
+    Texture diffuse_texture;
 };
 
 enum Keycode {

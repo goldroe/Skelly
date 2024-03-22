@@ -452,16 +452,16 @@ int main() {
         }
     }
 
-    // Model program
-    Model_Constants model_constants{};
-    D3D11_INPUT_ELEMENT_DESC model_input_layout[] = {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    // Basic Model program
+    Basic_Constants basic_constants{};
+    D3D11_INPUT_ELEMENT_DESC basic_input_layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Basic_Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Basic_Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Basic_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         
     };
-    std::string model_shader = read_file("data/model.hlsl");
-    Shader_Program model_program = create_shader_program(model_shader, "vs_main", "ps_main", model_input_layout, ARRAYSIZE(model_input_layout), sizeof(Model_Constants));
+    std::string basic_shader = read_file("data/shaders/basic.hlsl");
+    Shader_Program basic_program = create_shader_program(basic_shader, "vs_main", "ps_main", basic_input_layout, ARRAYSIZE(basic_input_layout), sizeof(Basic_Constants));
 
     Texture white_texture;
     load_texture("data/white.png", &white_texture);
@@ -478,10 +478,11 @@ int main() {
 
     // TODO: go through root and recursively process meshes
     // Load meshes
-    std::vector<Mesh> meshes;
+    Basic_Model model;
+    model.meshes.reserve(scene->mNumMeshes);
     for (u32 mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++) {
         aiMesh *ai_mesh = scene->mMeshes[mesh_index];
-        Mesh mesh{};
+        Basic_Mesh mesh;
         mesh.vertices.reserve(ai_mesh->mNumVertices);
         for (u32 vert_index = 0; vert_index < ai_mesh->mNumVertices; vert_index++) {
             aiVector3D p = ai_mesh->mVertices[vert_index];
