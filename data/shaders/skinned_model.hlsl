@@ -1,10 +1,15 @@
+#include "lighting.hlsl"
+
 #define MAX_BONES 100
 
 cbuffer constants_Per_Frame {
+    Directional_Light directional_light;
     float3 eye_pos_w;
 };
 
 cbuffer Constants_Per_Obj {
+    matrix world;
+    matrix world_inv_transpose;
     matrix wvp;
     matrix bone_matrices[MAX_BONES];
 };

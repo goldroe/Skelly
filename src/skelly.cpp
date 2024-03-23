@@ -92,18 +92,31 @@ input_button_pressed(Keycode key) {
     return keys_pressed[(int)key];
 }
 
+global LARGE_INTEGER global_clock_start;
+
+internal void
+win32_set_start_clock(LARGE_INTEGER start) {
+    global_clock_start = start;
+}
 
 global LARGE_INTEGER performance_frequency;
 internal f32
 win32_get_seconds_elapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
-    float Result = (float)(end.QuadPart - start.QuadPart) / (float)performance_frequency.QuadPart;
-    return Result;
+    float result = (float)(end.QuadPart - start.QuadPart) / (float)performance_frequency.QuadPart;
+    return result;
 }
 
 internal LARGE_INTEGER
 win32_get_wall_clock() {
     LARGE_INTEGER result;
     QueryPerformanceCounter(&result);
+    return result;
+}
+
+internal f32
+win32_get_current_time() {
+    LARGE_INTEGER now = win32_get_wall_clock();
+    f32 result = win32_get_seconds_elapsed(global_clock_start, now);
     return result;
 }
 
@@ -186,6 +199,35 @@ window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     return result;
 }
 
+internal std::string
+read_file(std::string file_name) {
+    std::string result{};
+    HANDLE file_handle = CreateFileA((LPCSTR)file_name.data(), GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file_handle != INVALID_HANDLE_VALUE) {
+        u64 bytes_to_read;
+        if (GetFileSizeEx(file_handle, (PLARGE_INTEGER)&bytes_to_read)) {
+            assert(bytes_to_read <= UINT32_MAX);
+            char *buffer = new char[bytes_to_read + 1];
+            buffer[bytes_to_read] = 0;
+            DWORD bytes_read;
+            if (ReadFile(file_handle, buffer, (DWORD)bytes_to_read, &bytes_read, NULL) && (DWORD)bytes_to_read ==  bytes_read) {
+                result = std::string(buffer);
+            } else {
+                // TODO: error handling
+                printf("ReadFile: error reading file, %s!\n", file_name.data());
+            }
+       } else {
+            // TODO: error handling
+            printf("GetFileSize: error getting size of file: %s!\n", file_name.data());
+       }
+       CloseHandle(file_handle);
+    } else {
+        // TODO: error handling
+        printf("CreateFile: error opening file: %s!\n", file_name.data());
+    }
+    return result;
+}
+
 internal void
 upload_constants(ID3D11Buffer *constant_buffer, void *constants, s32 constants_size) {
     D3D11_MAPPED_SUBRESOURCE res{};
@@ -212,15 +254,20 @@ create_constant_buffer(unsigned int size) {
 }
 
 internal Shader_Program
-create_shader_program(std::string source, std::string vs_entry, std::string ps_entry, D3D11_INPUT_ELEMENT_DESC *items, int item_count) {
+create_shader_program(std::string source_name, std::string vs_entry, std::string ps_entry, D3D11_INPUT_ELEMENT_DESC *items, int item_count) {
+    std::string source = read_file(source_name);
     Shader_Program program{};
     ID3DBlob *vs_blob, *ps_blob, *error_blob;
-    if (D3DCompile(source.data(), source.length(), nullptr, NULL, NULL, vs_entry.data(), "vs_5_0", D3DCOMPILE_DEBUG, 0, &vs_blob, &error_blob) != S_OK) {
-        fprintf(stderr, "Failed to compile Vertex Shader\n%s", (char *)error_blob->GetBufferPointer());
+    UINT flags = 0;
+    #if _DEBUG
+    flags |= D3DCOMPILE_DEBUG;
+    #endif
+    if (D3DCompile(source.data(), source.length(), source_name.data(), NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, vs_entry.data(), "vs_5_0", flags, 0, &vs_blob, &error_blob) != S_OK) {
+        fprintf(stderr, "Failed to compile Vertex Shader \"%s\"\n%s", source_name.data(), (char *)error_blob->GetBufferPointer());
         return program;
     }
-    if (D3DCompile(source.data(), source.length(), nullptr, NULL, NULL, ps_entry.data(), "ps_5_0", D3DCOMPILE_DEBUG, 0, &ps_blob, &error_blob) != S_OK) {
-        fprintf(stderr, "Failed to compile Pixel Shader\n%s", (char *)error_blob->GetBufferPointer());
+    if (D3DCompile(source.data(), source.length(), source_name.data(), NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, ps_entry.data(), "ps_5_0", flags, 0, &ps_blob, &error_blob) != S_OK) {
+        fprintf(stderr, "Failed to compile Pixel Shader \"%s\"\n%s", source_name.data(), (char *)error_blob->GetBufferPointer());
         return program;
     }
 
@@ -283,35 +330,6 @@ load_texture(std::string file_name, Texture *texture) {
         texture->texture_2d = tex_2d;
     }
     return success;
-}
-
-internal std::string
-read_file(std::string file_name) {
-    std::string result{};
-    HANDLE file_handle = CreateFileA((LPCSTR)file_name.data(), GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file_handle != INVALID_HANDLE_VALUE) {
-        u64 bytes_to_read;
-        if (GetFileSizeEx(file_handle, (PLARGE_INTEGER)&bytes_to_read)) {
-            assert(bytes_to_read <= UINT32_MAX);
-            char *buffer = new char[bytes_to_read + 1];
-            buffer[bytes_to_read] = 0;
-            DWORD bytes_read;
-            if (ReadFile(file_handle, buffer, (DWORD)bytes_to_read, &bytes_read, NULL) && (DWORD)bytes_to_read ==  bytes_read) {
-                result = std::string(buffer);
-            } else {
-                // TODO: error handling
-                printf("ReadFile: error reading file, %s!\n", file_name.data());
-            }
-       } else {
-            // TODO: error handling
-            printf("GetFileSize: error getting size of file: %s!\n", file_name.data());
-       }
-       CloseHandle(file_handle);
-    } else {
-        // TODO: error handling
-        printf("CreateFile: error opening file: %s!\n", file_name.data());
-    }
-    return result;
 }
 
 int main() {
@@ -467,11 +485,10 @@ int main() {
         { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Basic_Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Basic_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
-    std::string basic_shader = read_file("data/shaders/basic.hlsl");
     Shader_Basic shader_basic;
-    shader_basic.program = create_shader_program(basic_shader, "vs_main", "ps_main", basic_input_layout, ARRAYSIZE(basic_input_layout));
-    shader_basic.per_frame = create_constant_buffer(sizeof(Basic_Constants_Per_Obj));
-    shader_basic.per_obj = create_constant_buffer(sizeof(Basic_Constants_Per_Frame));
+    shader_basic.program = create_shader_program("data/shaders/basic.hlsl", "vs_main", "ps_main", basic_input_layout, ARRAYSIZE(basic_input_layout));
+    shader_basic.per_frame = create_constant_buffer(sizeof(Basic_Constants_Per_Frame));
+    shader_basic.per_obj = create_constant_buffer(sizeof(Basic_Constants_Per_Obj));
 
     // Create Skinned Shader
     D3D11_INPUT_ELEMENT_DESC skinned_input_layout[] = {
@@ -481,16 +498,15 @@ int main() {
         { "WEIGHTS", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, bone_weights), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "BONEINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, offsetof(Skinned_Vertex, bone_ids), D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
-    std::string skinned_shader = read_file("data/shaders/skinned_model.hlsl");
     Shader_Skinned shader_skinned;
-    shader_skinned.program = create_shader_program(skinned_shader, "vs_main", "ps_main", skinned_input_layout, ARRAYSIZE(skinned_input_layout));
+    shader_skinned.program = create_shader_program("data/shaders/skinned_model.hlsl", "vs_main", "ps_main", skinned_input_layout, ARRAYSIZE(skinned_input_layout));
     shader_skinned.per_frame = create_constant_buffer(sizeof(Skinned_Constants_Per_Frame));
     shader_skinned.per_obj = create_constant_buffer(sizeof(Skinned_Constants_Per_Obj));
 
     Texture white_texture;
     load_texture("data/white.png", &white_texture);
 
-    std::string file_name = "data/Crate1/Crate.fbx";
+    std::string file_name = "data/Crate/Crate.fbx";
     std::string model_path = file_name.substr(0, file_name.find_last_of("/\\"));
 
     // Import model scene
@@ -506,7 +522,7 @@ int main() {
     model.meshes.reserve(scene->mNumMeshes);
     for (u32 mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++) {
         aiMesh *ai_mesh = scene->mMeshes[mesh_index];
-        Basic_Mesh mesh;
+        Basic_Mesh mesh{};
         mesh.vertices.reserve(ai_mesh->mNumVertices);
         for (u32 vert_index = 0; vert_index < ai_mesh->mNumVertices; vert_index++) {
             aiVector3D p = ai_mesh->mVertices[vert_index];
@@ -578,6 +594,7 @@ int main() {
     }
 
     Camera camera{};
+    camera.position = HMM_V3(0.0f, 0.0f, 3.0f);
     camera.up = HMM_V3(0.0f, 1.0f, 0.0f);
     camera.right = HMM_V3(1.0f, 0.0f, 0.0f);
     camera.forward = HMM_V3(0.0f, 0.0f, -1.0f);
@@ -595,11 +612,19 @@ int main() {
     }
 
     model.material.color = HMM_V4(0.8f, 0.5f, 0.3f, 1.0f);
-    model.material.ambience = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
-    model.material.diffuse = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
-    model.material.specular = HMM_V3(1.0f, 1.0f, 1.0f);
+    model.material.ambient = HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
+    model.material.diffuse =  HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
+    model.material.specular = HMM_V4(0.3f, 0.3f, 0.3f, 32.0f);
+
+    Directional_Light directional_light{};
+    directional_light.ambient = HMM_V4(0.3f, 0.3f, 0.3f, 1.0f);
+    directional_light.diffuse = HMM_V4(0.45f, 0.45f, 0.45f, 1.0f);
+    directional_light.specular = HMM_V4(0.6f, 0.6f, 0.6f, 1.0f);
+    directional_light.direction = HMM_V3(0.0f, 1.0f, 0.0f);
 
     LARGE_INTEGER last_counter = win32_get_wall_clock();
+    win32_set_start_clock(last_counter);
+
     while (!window_should_close) {
         MSG message{};
         while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
@@ -640,17 +665,17 @@ int main() {
         HMM_Vec2 mouse_delta = get_mouse_delta();
 
         if (input_button_down(Key_W)) {
-            forward_dt += 0.1f;
+            forward_dt += 1.0f;
         }
         if (input_button_down(Key_S)) {
-            forward_dt -= 0.1f;
+            forward_dt -= 1.0f;
         }
 
         if (input_button_down(Key_A)) {
-            right_dt -= 0.1f;
+            right_dt -= 1.0f;
         }
         if (input_button_down(Key_D)) {
-            right_dt += 0.1f;
+            right_dt += 1.0f;
         }
 
         if (input_button_down(Key_Q)) {
@@ -678,10 +703,22 @@ int main() {
             camera.right = HMM_NormV3(HMM_Cross(camera.forward, camera.up));
         }
 
-        camera.position += camera.forward * forward_dt;
-        camera.position += camera.right * right_dt;
+        f32 camera_speed = 1.0f;
+        if (input_button_down(Key_Shift)) {
+            camera_speed *= 10.0f;
+        }
+        if (input_button_down(Key_Ctrl)) {
+            camera_speed *= 0.1f;
+        }
+
+        camera.position += camera.forward * forward_dt * camera_speed;
+        camera.position += camera.right * right_dt * camera_speed;
 
         camera.view_matrix = HMM_LookAt_RH(camera.position, camera.position + camera.forward, camera.up);
+
+        // NOTE: Light direction moves circularly
+        f32 t = 45.0f * win32_get_current_time();
+        directional_light.direction = HMM_Norm(HMM_V3(HMM_CosF(t), 0.0f, HMM_SinF(t)));
 
         // RENDER
         float bg_color[4] = {};
@@ -709,10 +746,12 @@ int main() {
 
         Basic_Constants_Per_Frame basic_per_frame{};
         basic_per_frame.eye_pos_w = camera.position;
+        basic_per_frame.directional_light = directional_light;
         upload_constants(shader_basic.per_frame, &basic_per_frame, sizeof(basic_per_frame));
 
         Basic_Constants_Per_Obj basic_per_obj;
         basic_per_obj.world = HMM_M4D(1.0f);
+        basic_per_obj.world_inv_transpose = HMM_Transpose(HMM_InvGeneral(basic_per_obj.world));
         basic_per_obj.wvp = wvp;
         basic_per_obj.material = model.material;
         upload_constants(shader_basic.per_obj, &basic_per_obj, sizeof(basic_per_obj));

@@ -29,10 +29,9 @@ struct Shader_Program {
 
 struct Material {
     HMM_Vec4 color;
-    HMM_Vec4 ambience;
+    HMM_Vec4 ambient;
     HMM_Vec4 diffuse;
-    HMM_Vec3 specular;
-    f32 pad;
+    HMM_Vec4 specular;
 };
 
 struct Directional_Light {
@@ -44,12 +43,13 @@ struct Directional_Light {
 };
 
 struct Basic_Constants_Per_Frame {
-    Directional_Light lights[3];
+    Directional_Light directional_light;
     HMM_Vec3 eye_pos_w;
 };
 
 struct Basic_Constants_Per_Obj {
     HMM_Mat4 world;
+    HMM_Mat4 world_inv_transpose;
     HMM_Mat4 wvp;
     Material material;
 };
@@ -87,19 +87,21 @@ struct Shader_Skinned {
     ID3D11Buffer *per_obj;
 };
 
+#define MAX_BONES 100
+#define MAX_BONE_INFLUENCE 4
+
 struct Skinned_Constants_Per_Frame {
-    Directional_Light lights[3];
+    Directional_Light directional_light;
     HMM_Vec3 eye_pos_w;
 };
 
 struct Skinned_Constants_Per_Obj {
     HMM_Mat4 world;
+    HMM_Mat4 world_inv_transpose;
     HMM_Mat4 wvp;
+    HMM_Mat4 bone_matrices[MAX_BONES];
     Material material;
 };
-
-#define MAX_BONES 100
-#define MAX_BONE_INFLUENCE 4
 
 struct Skinned_Vertex {
     HMM_Vec3 position;
