@@ -59,7 +59,6 @@ typedef double f64;
 
 #define CLAMP(V, Min, Max) ((V) < (Min) ? (Min) : (V) > (Max) ? (Max) : (V))
 
-
 global Assimp::Importer importer;
 
 global bool window_should_close;
@@ -188,24 +187,41 @@ window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
 }
 
 internal void
-upload_constants(ID3D11Buffer *constant_buffer, void *constants, int constants_size) {
+upload_constants(ID3D11Buffer *constant_buffer, void *constants, s32 constants_size) {
     D3D11_MAPPED_SUBRESOURCE res{};
-    if (d3d_context->Map(constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &res) != S_OK) {
-        printf("Failed to map constant buffer\n");
+    if (d3d_context->Map(constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &res) == S_OK) {
+        memcpy(res.pData, constants, constants_size);
+        d3d_context->Unmap(constant_buffer, 0);
+    } else {
+        fprintf(stderr, "Failed to map constant buffer\n");
     }
-    memcpy(res.pData, constants, constants_size);
-    d3d_context->Unmap(constant_buffer, 0);
+}
+
+internal ID3D11Buffer *
+create_constant_buffer(unsigned int size) {
+    ID3D11Buffer *constant_buffer = nullptr;
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = size;
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (d3d_device->CreateBuffer(&desc, nullptr, &constant_buffer) != S_OK) {
+        fprintf(stderr, "Failed to create constant buffer\n");
+    }
+    return constant_buffer;
 }
 
 internal Shader_Program
-create_shader_program(std::string source, std::string vs_entry, std::string ps_entry, D3D11_INPUT_ELEMENT_DESC *items, int item_count, int constants_size) {
+create_shader_program(std::string source, std::string vs_entry, std::string ps_entry, D3D11_INPUT_ELEMENT_DESC *items, int item_count) {
     Shader_Program program{};
     ID3DBlob *vs_blob, *ps_blob, *error_blob;
     if (D3DCompile(source.data(), source.length(), nullptr, NULL, NULL, vs_entry.data(), "vs_5_0", D3DCOMPILE_DEBUG, 0, &vs_blob, &error_blob) != S_OK) {
         fprintf(stderr, "Failed to compile Vertex Shader\n%s", (char *)error_blob->GetBufferPointer());
+        return program;
     }
     if (D3DCompile(source.data(), source.length(), nullptr, NULL, NULL, ps_entry.data(), "ps_5_0", D3DCOMPILE_DEBUG, 0, &ps_blob, &error_blob) != S_OK) {
         fprintf(stderr, "Failed to compile Pixel Shader\n%s", (char *)error_blob->GetBufferPointer());
+        return program;
     }
 
     if (d3d_device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), NULL, &program.vertex_shader) != S_OK) {
@@ -219,16 +235,6 @@ create_shader_program(std::string source, std::string vs_entry, std::string ps_e
     if (d3d_device->CreateInputLayout(items, item_count, vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), &program.input_layout) != S_OK) {
         fprintf(stderr, "Failed to create Input Layout\n");
     }
-
-    D3D11_BUFFER_DESC desc{};
-    desc.ByteWidth = constants_size;
-    desc.Usage = D3D11_USAGE_DYNAMIC;
-    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    if (d3d_device->CreateBuffer(&desc, NULL, &program.constant_buffer) != S_OK) {
-        fprintf(stderr, "Failed to create constant buffer\n");
-    }
-
     return program;
 }
 
@@ -339,6 +345,9 @@ int main() {
             os_popupf("CreateWindowA failed, err:%d\n", GetLastError());
         }
     }
+
+    // ShowCursor(FALSE);
+    // last_mouse_p = HMM_V2(WIDTH/2.0f, HEIGHT/2.0f);
 
     // INITIALIZE SWAP CHAIN
     DXGI_SWAP_CHAIN_DESC swapchain_desc{};
@@ -452,16 +461,31 @@ int main() {
         }
     }
 
-    // Basic Model program
-    Basic_Constants basic_constants{};
+    // Create Basic Shader
     D3D11_INPUT_ELEMENT_DESC basic_input_layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Basic_Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Basic_Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Basic_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        
     };
     std::string basic_shader = read_file("data/shaders/basic.hlsl");
-    Shader_Program basic_program = create_shader_program(basic_shader, "vs_main", "ps_main", basic_input_layout, ARRAYSIZE(basic_input_layout), sizeof(Basic_Constants));
+    Shader_Basic shader_basic;
+    shader_basic.program = create_shader_program(basic_shader, "vs_main", "ps_main", basic_input_layout, ARRAYSIZE(basic_input_layout));
+    shader_basic.per_frame = create_constant_buffer(sizeof(Basic_Constants_Per_Obj));
+    shader_basic.per_obj = create_constant_buffer(sizeof(Basic_Constants_Per_Frame));
+
+    // Create Skinned Shader
+    D3D11_INPUT_ELEMENT_DESC skinned_input_layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "WEIGHTS", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, bone_weights), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "BONEINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, offsetof(Skinned_Vertex, bone_ids), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    std::string skinned_shader = read_file("data/shaders/skinned_model.hlsl");
+    Shader_Skinned shader_skinned;
+    shader_skinned.program = create_shader_program(skinned_shader, "vs_main", "ps_main", skinned_input_layout, ARRAYSIZE(skinned_input_layout));
+    shader_skinned.per_frame = create_constant_buffer(sizeof(Skinned_Constants_Per_Frame));
+    shader_skinned.per_obj = create_constant_buffer(sizeof(Skinned_Constants_Per_Obj));
 
     Texture white_texture;
     load_texture("data/white.png", &white_texture);
@@ -491,7 +515,7 @@ int main() {
             if (ai_mesh->HasTextureCoords(0)) {
                 t = ai_mesh->mTextureCoords[0][vert_index];
             }
-            Vertex v = {HMM_V3(p.x, p.y, p.z), HMM_V3(n.x, n.y, n.z), HMM_V2(t.x, t.y)};
+            Basic_Vertex v = {HMM_V3(p.x, p.y, p.z), HMM_V3(n.x, n.y, n.z), HMM_V2(t.x, t.y)};
             mesh.vertices.push_back(v);
         }
 
@@ -527,7 +551,7 @@ int main() {
         // NOTE: Create vertex buffer
         {
             D3D11_BUFFER_DESC desc{};
-            desc.ByteWidth = sizeof(Vertex) * (int)mesh.vertices.size();
+            desc.ByteWidth = sizeof(Basic_Vertex) * (int)mesh.vertices.size();
             desc.Usage = D3D11_USAGE_DEFAULT;
             desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
             D3D11_SUBRESOURCE_DATA data{};
@@ -550,18 +574,17 @@ int main() {
             }
         }
 
-        meshes.push_back(mesh);
+        model.meshes.push_back(mesh);
     }
 
     Camera camera{};
     camera.up = HMM_V3(0.0f, 1.0f, 0.0f);
     camera.right = HMM_V3(1.0f, 0.0f, 0.0f);
     camera.forward = HMM_V3(0.0f, 0.0f, -1.0f);
-
     // NOTE: point toward -Z axis
     camera.yaw = -90.0f;
     camera.pitch =  0.0f;
-
+    
     {
         POINT pt;
         if (GetCursorPos(&pt)) {
@@ -570,6 +593,11 @@ int main() {
             }
         }
     }
+
+    model.material.color = HMM_V4(0.8f, 0.5f, 0.3f, 1.0f);
+    model.material.ambience = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
+    model.material.diffuse = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
+    model.material.specular = HMM_V3(1.0f, 1.0f, 1.0f);
 
     LARGE_INTEGER last_counter = win32_get_wall_clock();
     while (!window_should_close) {
@@ -677,27 +705,36 @@ int main() {
 
         HMM_Mat4 view = camera.view_matrix;
         HMM_Mat4 trans = HMM_Translate(camera.position);
-        HMM_Mat4 mvp = projection * view;
+        HMM_Mat4 wvp = projection * view;
 
-        model_constants.mvp = mvp;
-        model_constants.color = HMM_V4(1.0f, 1.0f, 1.0f, 1.0f);
+        Basic_Constants_Per_Frame basic_per_frame{};
+        basic_per_frame.eye_pos_w = camera.position;
+        upload_constants(shader_basic.per_frame, &basic_per_frame, sizeof(basic_per_frame));
 
-        upload_constants(model_program.constant_buffer, &model_constants, sizeof(model_constants));
+        Basic_Constants_Per_Obj basic_per_obj;
+        basic_per_obj.world = HMM_M4D(1.0f);
+        basic_per_obj.wvp = wvp;
+        basic_per_obj.material = model.material;
+        upload_constants(shader_basic.per_obj, &basic_per_obj, sizeof(basic_per_obj));
 
         d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d3d_context->IASetInputLayout(model_program.input_layout);
+        d3d_context->IASetInputLayout(shader_basic.program.input_layout);
 
-        d3d_context->VSSetConstantBuffers(0, 1, &model_program.constant_buffer);
-        d3d_context->PSSetConstantBuffers(0, 1, &model_program.constant_buffer);
-        d3d_context->VSSetShader(model_program.vertex_shader, nullptr, 0);
-        d3d_context->PSSetShader(model_program.pixel_shader, nullptr, 0);
+        d3d_context->VSSetConstantBuffers(0, 1, &shader_basic.per_frame);
+        d3d_context->VSSetConstantBuffers(1, 1, &shader_basic.per_obj);
+
+        d3d_context->PSSetConstantBuffers(0, 1, &shader_basic.per_frame);
+        d3d_context->PSSetConstantBuffers(1, 1, &shader_basic.per_obj);
+
+        d3d_context->VSSetShader(shader_basic.program.vertex_shader, nullptr, 0);
+        d3d_context->PSSetShader(shader_basic.program.pixel_shader, nullptr, 0);
 
         d3d_context->PSSetSamplers(0, 1, &model_sampler);
 
-        UINT stride = sizeof(Vertex);
+        UINT stride = sizeof(Basic_Vertex);
         UINT offset = 0;
-        for (int mesh_index = 0; mesh_index < meshes.size(); mesh_index++) {
-            Mesh mesh = meshes[mesh_index];
+        for (int mesh_index = 0; mesh_index < model.meshes.size(); mesh_index++) {
+            Basic_Mesh mesh = model.meshes[mesh_index];
             d3d_context->IASetIndexBuffer(mesh.index_buffer, DXGI_FORMAT_R32_UINT, 0);
             d3d_context->IASetVertexBuffers(0, 1, &mesh.vertex_buffer, &stride, &offset);
             if (mesh.texture.view) {

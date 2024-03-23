@@ -25,12 +25,39 @@ struct Shader_Program {
     ID3D11VertexShader *vertex_shader;
     ID3D11PixelShader *pixel_shader;
     ID3D11InputLayout *input_layout;
-    ID3D11Buffer *constant_buffer;
 };
 
-struct Basic_Constants {
-    HMM_Mat4 wvp;
+struct Material {
     HMM_Vec4 color;
+    HMM_Vec4 ambience;
+    HMM_Vec4 diffuse;
+    HMM_Vec3 specular;
+    f32 pad;
+};
+
+struct Directional_Light {
+    HMM_Vec4 ambient;
+    HMM_Vec4 diffuse;
+    HMM_Vec4 specular;
+    HMM_Vec3 direction;
+    f32 pad;
+};
+
+struct Basic_Constants_Per_Frame {
+    Directional_Light lights[3];
+    HMM_Vec3 eye_pos_w;
+};
+
+struct Basic_Constants_Per_Obj {
+    HMM_Mat4 world;
+    HMM_Mat4 wvp;
+    Material material;
+};
+
+struct Shader_Basic {
+    Shader_Program program;
+    ID3D11Buffer *per_frame;
+    ID3D11Buffer *per_obj;
 };
 
 struct Basic_Vertex {
@@ -48,25 +75,38 @@ struct Basic_Mesh {
 };
 
 struct Basic_Model {
-    std::vector<Basic_Mesh*> meshes;
-    Texture diffuse_texture;
+    std::vector<Basic_Mesh> meshes;
+    Material material;
+    // Texture diffuse_texture;
+};
+
+
+struct Shader_Skinned {
+    Shader_Program program;
+    ID3D11Buffer *per_frame;
+    ID3D11Buffer *per_obj;
+};
+
+struct Skinned_Constants_Per_Frame {
+    Directional_Light lights[3];
+    HMM_Vec3 eye_pos_w;
+};
+
+struct Skinned_Constants_Per_Obj {
+    HMM_Mat4 world;
+    HMM_Mat4 wvp;
+    Material material;
 };
 
 #define MAX_BONES 100
 #define MAX_BONE_INFLUENCE 4
 
-struct Skinned_Constants {
-    HMM_Mat4 wvp;
-    HMM_Mat4 bone_matrices[MAX_BONES];
-    HMM_Vec4 color;
-};
-
 struct Skinned_Vertex {
     HMM_Vec3 position;
     HMM_Vec3 normal;
     HMM_Vec2 uv;
-    u32 bone_ids[MAX_BONE_INFLUENCE];
     f32 bone_weights[MAX_BONES];
+    u32 bone_ids[MAX_BONE_INFLUENCE];
 };
 
 struct Skinned_Mesh {
@@ -78,7 +118,7 @@ struct Skinned_Mesh {
 };
 
 struct Skinned_Model {
-    std::vector<Skinned_Mesh*> meshes;
+    std::vector<Skinned_Mesh> meshes;
     Texture diffuse_texture;
 };
 
