@@ -59,7 +59,6 @@ typedef double f64;
 
 #define CLAMP(V, Min, Max) ((V) < (Min) ? (Min) : (V) > (Max) ? (Max) : (V))
 
-global Assimp::Importer importer;
 
 global bool window_should_close;
 
@@ -332,6 +331,211 @@ load_texture(std::string file_name, Texture *texture) {
     return success;
 }
 
+internal std::string
+get_parent_path(std::string file_name) {
+    std::string parent = file_name.substr(0, file_name.find_last_of("/\\"));
+    return parent;
+}
+
+internal Basic_Model
+load_basic_model(std::string file_name) {
+    Assimp::Importer importer;
+    u32 import_flags = aiProcess_Triangulate | aiProcess_FlipUVs;
+    const aiScene *scene = importer.ReadFile(file_name.data(), import_flags);
+    if (!scene) {
+        fprintf(stderr, "Failed to load mesh %s: %s\n", file_name.data(), importer.GetErrorString());
+    }
+    std::string model_path = get_parent_path(file_name);
+
+    Basic_Model model{};
+    model.meshes.reserve(scene->mNumMeshes);
+    for (u32 mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++) {
+        aiMesh *ai_mesh = scene->mMeshes[mesh_index];
+        Basic_Mesh mesh{};
+        mesh.vertices.reserve(ai_mesh->mNumVertices);
+        for (u32 vert_index = 0; vert_index < ai_mesh->mNumVertices; vert_index++) {
+            aiVector3D p = ai_mesh->mVertices[vert_index];
+            aiVector3D n = ai_mesh->mNormals[vert_index];
+            aiVector3D t = {};
+            if (ai_mesh->HasTextureCoords(0)) {
+                t = ai_mesh->mTextureCoords[0][vert_index];
+            }
+            Basic_Vertex v;
+            v.position = HMM_V3(p.x, p.y, p.z);
+            v.normal = HMM_V3(n.x, n.y, n.z);
+            v.uv = HMM_V2(t.x, t.y);
+            mesh.vertices.push_back(v);
+        }
+
+        for (u32 i = 0; i < ai_mesh->mNumFaces; i++) {
+            aiFace *face = ai_mesh->mFaces + i;
+            assert(face->mNumIndices <= 3);
+            mesh.indices.push_back(face->mIndices[0]);
+            mesh.indices.push_back(face->mIndices[1]);
+            mesh.indices.push_back(face->mIndices[2]);
+        }
+
+        aiMaterial *material = scene->mMaterials[ai_mesh->mMaterialIndex];
+        if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+            aiString name;
+            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &name) == AI_SUCCESS) {
+                std::string material_file = model_path + "/" + name.data;
+                printf("material:%s\n", material_file.data());
+                if (!load_texture(material_file, &mesh.texture)) {
+                    printf("Error loading texture:%s\n", material_file.data());
+                }
+            }
+        }
+
+        // NOTE: Create vertex buffer
+        {
+            D3D11_BUFFER_DESC desc{};
+            desc.ByteWidth = sizeof(Basic_Vertex) * (int)mesh.vertices.size();
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data{};
+            data.pSysMem = mesh.vertices.data();
+            if (d3d_device->CreateBuffer(&desc, &data, &mesh.vertex_buffer) != S_OK) {
+                fprintf(stderr, "Failed to create vertex buffer\n");
+            }
+        }
+
+        // NOTE: Create index buffer
+        {
+            D3D11_BUFFER_DESC desc{};
+            desc.ByteWidth = sizeof(u32) * (int)mesh.indices.size();
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data{};
+            data.pSysMem = mesh.indices.data();
+            if (d3d_device->CreateBuffer(&desc, &data, &mesh.index_buffer) != S_OK) {
+                fprintf(stderr, "Failed to create index buffer\n");
+            }
+        }
+
+        model.meshes.push_back(mesh);
+    }
+    return model; 
+}
+
+
+internal void
+set_bone_weight(Skinned_Vertex *vertex, s32 bone_id, f32 bone_weight) {
+    for (int i = 0; i < MAX_BONE_WEIGHTS; i++) {
+        if (vertex->bone_ids[i] == -1) {
+            vertex->bone_ids[i] = bone_id;
+            vertex->bone_weights[i] = bone_weight;
+            break;
+        }
+    }
+}
+
+internal HMM_Mat4
+convert_assimp_matrix(aiMatrix4x4 m) {
+    HMM_Mat4 M;
+    M.Columns[0] = HMM_V4(m.a1, m.b1, m.c1, m.d1);
+    M.Columns[1] = HMM_V4(m.a2, m.b2, m.c2, m.d2);
+    M.Columns[2] = HMM_V4(m.a3, m.b3, m.c3, m.d3);
+    M.Columns[3] = HMM_V4(m.a4, m.b4, m.c4, m.d4);
+    return M;
+}
+
+internal Skinned_Model
+load_skinned_model(std::string file_name) {
+    Assimp::Importer importer;
+    u32 import_flags = aiProcess_Triangulate | aiProcess_FlipUVs;
+    const aiScene *scene = importer.ReadFile(file_name.data(), import_flags);
+    if (!scene) {
+        fprintf(stderr, "Failed to load mesh %s: %s\n", file_name.data(), importer.GetErrorString());
+    }
+    std::string model_path = get_parent_path(file_name);
+
+    Skinned_Model model{};
+    model.meshes.reserve(scene->mNumMeshes);
+    for (u32 mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++) {
+        aiMesh *ai_mesh = scene->mMeshes[mesh_index];
+        Skinned_Mesh mesh{};
+        mesh.vertices.reserve(ai_mesh->mNumVertices);
+        for (u32 vert_index = 0; vert_index < ai_mesh->mNumVertices; vert_index++) {
+            aiVector3D p = ai_mesh->mVertices[vert_index];
+            aiVector3D n = ai_mesh->mNormals[vert_index];
+            aiVector3D t = {};
+            if (ai_mesh->HasTextureCoords(0)) {
+                t = ai_mesh->mTextureCoords[0][vert_index];
+            }
+            Skinned_Vertex v;
+            v.position = HMM_V3(p.x, p.y, p.z);
+            v.normal = HMM_V3(n.x, n.y, n.z);
+            v.uv = HMM_V2(t.x, t.y);
+            v.bone_weights[0] = v.bone_weights[1] = v.bone_weights[2] = v.bone_weights[3] = 0;
+            v.bone_ids[0] = v.bone_ids[1] = v.bone_ids[2] = v.bone_ids[3] = -1;
+            mesh.vertices.push_back(v);
+        }
+
+        // NOTE: Load bone data
+        assert(ai_mesh->mNumBones <= MAX_BONES);
+        for (u32 bone_index = 0; bone_index < ai_mesh->mNumBones; bone_index++) {
+            aiBone *bone = ai_mesh->mBones[bone_index];
+            for (u32 weight_index = 0; weight_index < bone->mNumWeights; weight_index++) {
+                aiVertexWeight ai_weight = bone->mWeights[weight_index];
+                Skinned_Vertex *vertex = &mesh.vertices[ai_weight.mVertexId];
+                set_bone_weight(vertex, bone_index, ai_weight.mWeight);
+            }
+            HMM_Mat4 offset_matrix = convert_assimp_matrix(bone->mOffsetMatrix);
+            model.bone_matrices[bone_index] = offset_matrix;
+        }
+
+        for (u32 i = 0; i < ai_mesh->mNumFaces; i++) {
+            aiFace *face = ai_mesh->mFaces + i;
+            assert(face->mNumIndices <= 3);
+            mesh.indices.push_back(face->mIndices[0]);
+            mesh.indices.push_back(face->mIndices[1]);
+            mesh.indices.push_back(face->mIndices[2]);
+        }
+
+        aiMaterial *material = scene->mMaterials[ai_mesh->mMaterialIndex];
+        if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+            aiString name;
+            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &name) == AI_SUCCESS) {
+                std::string material_file = model_path + "/" + name.data;
+                printf("material:%s\n", material_file.data());
+                if (!load_texture(material_file, &mesh.texture)) {
+                    printf("Error loading texture:%s\n", material_file.data());
+                }
+            }
+        }
+
+        // NOTE: Create vertex buffer
+        {
+            D3D11_BUFFER_DESC desc{};
+            desc.ByteWidth = sizeof(Skinned_Vertex) * (int)mesh.vertices.size();
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data{};
+            data.pSysMem = mesh.vertices.data();
+            if (d3d_device->CreateBuffer(&desc, &data, &mesh.vertex_buffer) != S_OK) {
+                fprintf(stderr, "Failed to create vertex buffer\n");
+            }
+        }
+
+        // NOTE: Create index buffer
+        {
+            D3D11_BUFFER_DESC desc{};
+            desc.ByteWidth = sizeof(u32) * (int)mesh.indices.size();
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data{};
+            data.pSysMem = mesh.indices.data();
+            if (d3d_device->CreateBuffer(&desc, &data, &mesh.index_buffer) != S_OK) {
+                fprintf(stderr, "Failed to create index buffer\n");
+            }
+        }
+
+        model.meshes.push_back(mesh);
+    }
+    return model; 
+}
+
 int main() {
     QueryPerformanceFrequency(&performance_frequency);
     UINT desired_scheduler_ms = 1;
@@ -494,9 +698,9 @@ int main() {
     D3D11_INPUT_ELEMENT_DESC skinned_input_layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "WEIGHTS", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Skinned_Vertex, bone_weights), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "BONEINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, offsetof(Skinned_Vertex, bone_ids), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Skinned_Vertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "WEIGHTS", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(Skinned_Vertex, bone_weights), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "BONEINDICES", 0, DXGI_FORMAT_R32G32B32A32_SINT, 0, offsetof(Skinned_Vertex, bone_ids), D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     Shader_Skinned shader_skinned;
     shader_skinned.program = create_shader_program("data/shaders/skinned_model.hlsl", "vs_main", "ps_main", skinned_input_layout, ARRAYSIZE(skinned_input_layout));
@@ -506,92 +710,7 @@ int main() {
     Texture white_texture;
     load_texture("data/white.png", &white_texture);
 
-    std::string file_name = "data/Crate/Crate.fbx";
-    std::string model_path = file_name.substr(0, file_name.find_last_of("/\\"));
-
-    // Import model scene
-    u32 flags = aiProcess_Triangulate | aiProcess_FlipUVs;
-    const aiScene *scene = importer.ReadFile(file_name.data(), flags);
-    if (!scene) {
-        printf("Failed to load mesh %s: %s\n", file_name.data(), importer.GetErrorString());
-    }
-
-    // TODO: go through root and recursively process meshes
-    // Load meshes
-    Basic_Model model;
-    model.meshes.reserve(scene->mNumMeshes);
-    for (u32 mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++) {
-        aiMesh *ai_mesh = scene->mMeshes[mesh_index];
-        Basic_Mesh mesh{};
-        mesh.vertices.reserve(ai_mesh->mNumVertices);
-        for (u32 vert_index = 0; vert_index < ai_mesh->mNumVertices; vert_index++) {
-            aiVector3D p = ai_mesh->mVertices[vert_index];
-            aiVector3D n = ai_mesh->mNormals[vert_index];
-            aiVector3D t = {};
-            if (ai_mesh->HasTextureCoords(0)) {
-                t = ai_mesh->mTextureCoords[0][vert_index];
-            }
-            Basic_Vertex v = {HMM_V3(p.x, p.y, p.z), HMM_V3(n.x, n.y, n.z), HMM_V2(t.x, t.y)};
-            mesh.vertices.push_back(v);
-        }
-
-        // NOTE: Load bone datat
-        // for (u32 bone_index = 0; bone_index < ai_mesh->mNumBones; bone_index++) {
-        //     aiBone *bone = ai_mesh->mBones[bone_index];
-        //     for (u32 vertex_index = 0; vertex_index < bone->mNumWeights; vertex_index++) {
-        //         aiVertexWeight weight = bone->mWeights[vertex_index];
-        //         // mesh.vertices[weight.mVertexId].bone_weights[0] = weight.mWeight;
-        //     }
-        // }
-
-        for (u32 i = 0; i < ai_mesh->mNumFaces; i++) {
-            aiFace *face = ai_mesh->mFaces + i;
-            assert(face->mNumIndices == 3);
-            mesh.indices.push_back(face->mIndices[0]);
-            mesh.indices.push_back(face->mIndices[1]);
-            mesh.indices.push_back(face->mIndices[2]);
-        }
-
-        aiMaterial *material = scene->mMaterials[ai_mesh->mMaterialIndex];
-        if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
-            aiString name;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &name) == AI_SUCCESS) {
-                std::string material_file = model_path + "/" + name.data;
-                printf("material:%s\n", material_file.data());
-                if (!load_texture(material_file, &mesh.texture)) {
-                    printf("Error loading texture:%s\n", material_file.data());
-                }
-            }
-        }
-
-        // NOTE: Create vertex buffer
-        {
-            D3D11_BUFFER_DESC desc{};
-            desc.ByteWidth = sizeof(Basic_Vertex) * (int)mesh.vertices.size();
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-            D3D11_SUBRESOURCE_DATA data{};
-            data.pSysMem = mesh.vertices.data();
-            if (d3d_device->CreateBuffer(&desc, &data, &mesh.vertex_buffer) != S_OK) {
-                fprintf(stderr, "Failed to create vertex buffer\n");
-            }
-        }
-
-        // NOTE: Create index buffer
-        {
-            D3D11_BUFFER_DESC desc{};
-            desc.ByteWidth = sizeof(u32) * (int)mesh.indices.size();
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-            D3D11_SUBRESOURCE_DATA data{};
-            data.pSysMem = mesh.indices.data();
-            if (d3d_device->CreateBuffer(&desc, &data, &mesh.index_buffer) != S_OK) {
-                fprintf(stderr, "Failed to create index buffer\n");
-            }
-        }
-
-        model.meshes.push_back(mesh);
-    }
+    Skinned_Model model = load_skinned_model("data/Vampire/dancing_vampire.dae");
 
     Camera camera{};
     camera.position = HMM_V3(0.0f, 0.0f, 3.0f);
@@ -738,42 +857,43 @@ int main() {
         d3d_context->RSSetState(rasterizer_state);
 
         d3d_context->OMSetBlendState(blend_state, NULL, 0xffffffff);
-        // d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
+        d3d_context->OMSetDepthStencilState(depth_stencil_state, 0);
 
         HMM_Mat4 view = camera.view_matrix;
         HMM_Mat4 trans = HMM_Translate(camera.position);
         HMM_Mat4 wvp = projection * view;
 
-        Basic_Constants_Per_Frame basic_per_frame{};
-        basic_per_frame.eye_pos_w = camera.position;
-        basic_per_frame.directional_light = directional_light;
-        upload_constants(shader_basic.per_frame, &basic_per_frame, sizeof(basic_per_frame));
+        Skinned_Constants_Per_Frame skinned_per_frame{};
+        skinned_per_frame.directional_light = directional_light;
+        skinned_per_frame.eye_pos_w = camera.position;
+        upload_constants(shader_skinned.per_frame, &skinned_per_frame, sizeof(Skinned_Constants_Per_Frame));
 
-        Basic_Constants_Per_Obj basic_per_obj;
-        basic_per_obj.world = HMM_M4D(1.0f);
-        basic_per_obj.world_inv_transpose = HMM_Transpose(HMM_InvGeneral(basic_per_obj.world));
-        basic_per_obj.wvp = wvp;
-        basic_per_obj.material = model.material;
-        upload_constants(shader_basic.per_obj, &basic_per_obj, sizeof(basic_per_obj));
+        Skinned_Constants_Per_Obj skinned_per_obj{};
+        skinned_per_obj.world = HMM_M4D(1.0f);
+        skinned_per_obj.world_inv_transpose = HMM_Transpose(HMM_InvGeneral(skinned_per_obj.world));
+        skinned_per_obj.wvp = wvp;
+        memcpy(skinned_per_obj.bone_matrices, model.bone_matrices, MAX_BONES * sizeof(HMM_Mat4));
+        skinned_per_obj.material = model.material;
+        upload_constants(shader_skinned.per_obj, &skinned_per_obj, sizeof(Skinned_Constants_Per_Obj));
 
         d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d3d_context->IASetInputLayout(shader_basic.program.input_layout);
+        d3d_context->IASetInputLayout(shader_skinned.program.input_layout);
 
-        d3d_context->VSSetConstantBuffers(0, 1, &shader_basic.per_frame);
-        d3d_context->VSSetConstantBuffers(1, 1, &shader_basic.per_obj);
+        d3d_context->VSSetConstantBuffers(0, 1, &shader_skinned.per_frame);
+        d3d_context->VSSetConstantBuffers(1, 1, &shader_skinned.per_obj);
 
-        d3d_context->PSSetConstantBuffers(0, 1, &shader_basic.per_frame);
-        d3d_context->PSSetConstantBuffers(1, 1, &shader_basic.per_obj);
+        d3d_context->PSSetConstantBuffers(0, 1, &shader_skinned.per_frame);
+        d3d_context->PSSetConstantBuffers(1, 1, &shader_skinned.per_obj);
 
-        d3d_context->VSSetShader(shader_basic.program.vertex_shader, nullptr, 0);
-        d3d_context->PSSetShader(shader_basic.program.pixel_shader, nullptr, 0);
+        d3d_context->VSSetShader(shader_skinned.program.vertex_shader, nullptr, 0);
+        d3d_context->PSSetShader(shader_skinned.program.pixel_shader, nullptr, 0);
 
         d3d_context->PSSetSamplers(0, 1, &model_sampler);
 
-        UINT stride = sizeof(Basic_Vertex);
+        UINT stride = sizeof(Skinned_Vertex);
         UINT offset = 0;
         for (int mesh_index = 0; mesh_index < model.meshes.size(); mesh_index++) {
-            Basic_Mesh mesh = model.meshes[mesh_index];
+            Skinned_Mesh mesh = model.meshes[mesh_index];
             d3d_context->IASetIndexBuffer(mesh.index_buffer, DXGI_FORMAT_R32_UINT, 0);
             d3d_context->IASetVertexBuffers(0, 1, &mesh.vertex_buffer, &stride, &offset);
             if (mesh.texture.view) {

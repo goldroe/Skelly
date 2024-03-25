@@ -77,9 +77,7 @@ struct Basic_Mesh {
 struct Basic_Model {
     std::vector<Basic_Mesh> meshes;
     Material material;
-    // Texture diffuse_texture;
 };
-
 
 struct Shader_Skinned {
     Shader_Program program;
@@ -88,7 +86,7 @@ struct Shader_Skinned {
 };
 
 #define MAX_BONES 100
-#define MAX_BONE_INFLUENCE 4
+#define MAX_BONE_WEIGHTS 4
 
 struct Skinned_Constants_Per_Frame {
     Directional_Light directional_light;
@@ -107,8 +105,8 @@ struct Skinned_Vertex {
     HMM_Vec3 position;
     HMM_Vec3 normal;
     HMM_Vec2 uv;
-    f32 bone_weights[MAX_BONES];
-    u32 bone_ids[MAX_BONE_INFLUENCE];
+    f32 bone_weights[MAX_BONE_WEIGHTS];
+    s32 bone_ids[MAX_BONE_WEIGHTS];
 };
 
 struct Skinned_Mesh {
@@ -121,7 +119,8 @@ struct Skinned_Mesh {
 
 struct Skinned_Model {
     std::vector<Skinned_Mesh> meshes;
-    Texture diffuse_texture;
+    HMM_Mat4 bone_matrices[MAX_BONES];
+    Material material;
 };
 
 enum Keycode {
