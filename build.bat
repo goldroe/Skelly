@@ -6,7 +6,7 @@ if [%1]==[] (
 )
 
 IF NOT EXIST build MKDIR build
-SET warning_flags=/WX /W4 /wd4100 /wd4189 /wd4505
+SET warning_flags=/WX /W4 /wd4100 /wd4101 /wd4189 /wd4505 
 SET includes=/Iext\ /Iext\assimp\include\
 SET compiler_flags=%warning_flags% %includes% /nologo /FC /Fdbuild\ /Fobuild\ /FeSkelly.exe /EHsc
 
