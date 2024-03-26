@@ -440,6 +440,56 @@ convert_assimp_matrix(aiMatrix4x4 m) {
     return M;
 }
 
+internal HMM_Vec3
+convert_assimp_vec3(aiVector3D v) {
+    HMM_Vec3 V;
+    V.X = v.x;
+    V.Y = v.y;
+    V.Z = v.z;
+    return V;
+} 
+
+internal Animation
+load_animation(std::string file_name) {
+    Assimp::Importer importer;
+    u32 import_flags = aiProcess_Triangulate | aiProcess_FlipUVs;
+    const aiScene *scene = importer.ReadFile(file_name.data(), import_flags);
+    if (!scene) {
+        fprintf(stderr, "Failed to load animation %s: %s\n", file_name.data(), importer.GetErrorString());
+    }
+    Animation animation{};
+    if (!scene->HasAnimations()) {
+        fprintf(stderr, "File has no animations %s: %s\n", file_name.data(), importer.GetErrorString());
+        return animation;
+    }
+
+    aiAnimation *ai_anim = scene->mAnimations[0];
+    animation.name = ai_anim->mName.C_Str();
+    animation.duration = (f32)ai_anim->mDuration;
+    animation.ticks_per_second = (f32)ai_anim->mTicksPerSecond;
+
+    for (u32 channel_index = 0; channel_index < ai_anim->mNumChannels; channel_index++) {
+        aiNodeAnim *channel = ai_anim->mChannels[channel_index];
+        Bone *bone = nullptr; // find_bone(model, channel->mNodeName);
+        if (bone) {
+            for (u32 key_index = 0; key_index < channel->mNumPositionKeys; key_index++) {
+                KeyVector key;
+                key.time = (f32)channel->mPositionKeys[key_index].mTime;
+                key.value = convert_assimp_vec3(channel->mPositionKeys[key_index].mValue);
+                bone->translation_keys.push_back(key);
+            }
+            for (u32 key_index = 0; key_index < channel->mNumScalingKeys; key_index++) {
+                KeyVector key;
+                key.time = (f32)channel->mScalingKeys[key_index].mTime;
+                key.value = convert_assimp_vec3(channel->mScalingKeys[key_index].mValue);
+                bone->scaling_keys.push_back(key);
+            }
+        }
+    }
+    
+    return animation;
+}
+
 internal Skinned_Model
 load_skinned_model(std::string file_name) {
     Assimp::Importer importer;
@@ -577,7 +627,7 @@ int main() {
         DXGI_MODE_DESC buffer_desc{};
         buffer_desc.Width = WIDTH;
         buffer_desc.Height = HEIGHT;
-        buffer_desc.RefreshRate.Numerator = 60;
+        buffer_desc.RefreshRate.Numerator = 75;
         buffer_desc.RefreshRate.Denominator = 1;
         buffer_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         buffer_desc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
@@ -741,6 +791,9 @@ int main() {
     directional_light.specular = HMM_V4(0.6f, 0.6f, 0.6f, 1.0f);
     directional_light.direction = HMM_V3(0.0f, 1.0f, 0.0f);
 
+    f32 animation_time = 0.0f;
+
+    f32 delta_t = 0.0f;
     LARGE_INTEGER last_counter = win32_get_wall_clock();
     win32_set_start_clock(last_counter);
 
@@ -911,9 +964,10 @@ int main() {
         }
 
         LARGE_INTEGER end_counter = win32_get_wall_clock();
+        float seconds_elapsed = win32_get_seconds_elapsed(last_counter, end_counter);
+        delta_t = seconds_elapsed;
 #if 0
-        float seconds_elapsed = 1000.0f * win32_get_seconds_elapsed(last_counter, end_counter);
-        printf("seconds: %f\n", seconds_elapsed);
+        printf("MS: %f\n", 1000.0f * seconds_elapsed);
 #endif
         last_counter = end_counter;
     }

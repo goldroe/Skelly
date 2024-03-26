@@ -1,6 +1,7 @@
 #include "lighting.hlsl"
 
 #define MAX_BONES 100
+#define MAX_WEIGHTS 4
 
 cbuffer Constants_Per_Frame : register(b0) {
     Directional_Light directional_light;
@@ -35,8 +36,18 @@ Texture2D texture_diffuse;
 
 Vertex_Out vs_main(Vertex_In vin) {
     Vertex_Out vout;
-    vout.pos_w = mul(world, float4(vin.pos_l, 1.0)).xyz;
-    vout.pos_h = mul(wvp, float4(vin.pos_l, 1.0));
+    float4 pos_l = float4(0, 0, 0, 0);
+    for (int i = 0; i < MAX_WEIGHTS; i++) {
+        if (vin.bone_indices[i] == -1) continue;
+        if (vin.bone_indices[i] >= MAX_BONES) {
+            pos_l = float4(vin.pos_l, 1.0);
+            break;
+        }
+
+        pos_l += vin.weights[i] * mul(bone_matrices[vin.bone_indices[i]], float4(vin.pos_l, 1.0));
+    }
+    vout.pos_w = mul(world, pos_l).xyz;
+    vout.pos_h = mul(wvp, pos_l);
     vout.normal_w = mul(world_inv_transpose, float4(vin.normal_l, 1.0)).xyz;
     vout.uv = vin.uv;
     return vout;
