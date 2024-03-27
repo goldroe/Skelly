@@ -59,7 +59,6 @@ typedef double f64;
 
 #define CLAMP(V, Min, Max) ((V) < (Min) ? (Min) : (V) > (Max) ? (Max) : (V))
 
-
 global bool window_should_close;
 
 global IDXGISwapChain *swapchain;
@@ -67,38 +66,16 @@ global ID3D11Device *d3d_device;
 global ID3D11DeviceContext *d3d_context;
 global ID3D11RenderTargetView *render_target;
 
-global bool keys_down[256];
-global bool keys_pressed[256];
-
-global HMM_Vec2 last_mouse_p;
-global HMM_Vec2 mouse_p;
-
-internal HMM_Vec2
-get_mouse_delta() {
-    HMM_Vec2 result = mouse_p - last_mouse_p;
-    return result;
-}
-
-internal bool
-input_button_down(Keycode key) {
-    assert(key > Key_Begin && key < Key_Last);
-    return keys_down[(int)key];
-}
-
-internal bool
-input_button_pressed(Keycode key) {
-    assert(key > Key_Begin && key < Key_Last);
-    return keys_pressed[(int)key];
-}
-
 global LARGE_INTEGER global_clock_start;
+global LARGE_INTEGER performance_frequency;
+
+#include "input.cpp"
 
 internal void
 win32_set_start_clock(LARGE_INTEGER start) {
     global_clock_start = start;
 }
 
-global LARGE_INTEGER performance_frequency;
 internal f32
 win32_get_seconds_elapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
     float result = (float)(end.QuadPart - start.QuadPart) / (float)performance_frequency.QuadPart;
@@ -151,18 +128,33 @@ LRESULT CALLBACK
 window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
     switch (Msg) {
+    case WM_MOUSEMOVE: {
+        int px = GET_X_LPARAM(lParam);
+        int py = GET_Y_LPARAM(lParam);
+        _input.last_cursor_px = _input.cursor_px;
+        _input.last_cursor_py = _input.cursor_py;
+        _input.cursor_px = px;
+        _input.cursor_py = py;
+        _input.delta_x = _input.cursor_px - _input.last_cursor_px;
+        _input.delta_y = _input.cursor_py - _input.last_cursor_py;
+        break;
+    }
+
     case WM_KEYDOWN:
-    case WM_KEYUP: {
+    case WM_KEYUP:
+    {
         int vk_code = (int)wParam;
         bool key_down = (((u32)lParam >> 31) == 0);
         bool key_down_previous = (((u32)lParam >> 30) == 1);
         if (vk_code > (int)Key_Begin && vk_code < (int)Key_Last) {
-            keys_pressed[vk_code] = key_down_previous;
-            keys_down[vk_code] = key_down;
+            _keys_pressed[vk_code] = key_down_previous;
+            _keys_down[vk_code] = key_down;
         }
         break;
     }
-    case WM_SIZE: {
+    
+    case WM_SIZE:
+    {
         // NOTE: Resize render target view
         if (swapchain) {
             d3d_context->OMSetRenderTargets(0, 0, 0);
@@ -189,6 +181,7 @@ window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
         }
         break;
     }
+
     case WM_CLOSE:
         PostQuitMessage(0);
         break;
@@ -618,8 +611,15 @@ int main() {
         }
     }
 
-    // ShowCursor(FALSE);
-    // last_mouse_p = HMM_V2(WIDTH/2.0f, HEIGHT/2.0f);
+    // NOTE: initialize cursor
+    ShowCursor(FALSE);
+    {
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(window, &pt);
+        _input.cursor_px = _input.last_cursor_px = pt.x;
+        _input.cursor_py = _input.last_cursor_py = pt.y;
+    }
 
     // INITIALIZE SWAP CHAIN
     DXGI_SWAP_CHAIN_DESC swapchain_desc{};
@@ -771,15 +771,6 @@ int main() {
     camera.yaw = -90.0f;
     camera.pitch =  0.0f;
     
-    {
-        POINT pt;
-        if (GetCursorPos(&pt)) {
-            if (ScreenToClient(window, &pt)) {
-                last_mouse_p = mouse_p = HMM_V2((f32)pt.x, (f32)pt.y);
-            }
-        }
-    }
-
     model.material.color = HMM_V4(0.8f, 0.5f, 0.3f, 1.0f);
     model.material.ambient = HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
     model.material.diffuse =  HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
@@ -816,17 +807,6 @@ int main() {
         // ==============================
         // INPUT
         // ==============================
-        // Update mouse input
-        {
-            POINT pt;
-            if (GetCursorPos(&pt)) {
-                if (ScreenToClient(window, &pt)) {
-                    last_mouse_p = mouse_p;
-                    mouse_p = HMM_V2((f32)pt.x, (f32)pt.y);
-                }
-            }
-        }
-
         if (input_button_down(Key_Escape)) {
             window_should_close = true;
         }
@@ -834,7 +814,7 @@ int main() {
         f32 forward_dt = 0.0f;
         f32 right_dt = 0.0f;
 
-        HMM_Vec2 mouse_delta = get_mouse_delta();
+        HMM_Vec2 cursor_delta = get_cursor_delta();
 
         if (input_button_down(Key_W)) {
             forward_dt += 1.0f;
@@ -859,8 +839,8 @@ int main() {
 
         {
             // Rotate around Y-axis
-            f32 yaw_dt = 0.2f * mouse_delta.X;
-            f32 pitch_dt = 0.2f * mouse_delta.Y;
+            f32 yaw_dt = 100.0f * cursor_delta.X * delta_t;
+            f32 pitch_dt = 100.0f * cursor_delta.Y * delta_t;
             camera.yaw += yaw_dt;
             camera.pitch -= pitch_dt;
 
@@ -959,8 +939,22 @@ int main() {
 
         swapchain->Present(0, 0);
 
-        for (int i = 0; i < 256; i++) {
-            keys_pressed[i] = false;
+        input_reset_keys_pressed();
+        {
+            _input.delta_x = 0;
+            _input.delta_y = 0;
+            int w, h;
+            win32_get_window_dim(window, &w, &h);
+            int center_x = w / 2;
+            int center_y = h / 2;
+            _input.cursor_px = _input.last_cursor_px = center_x;
+            _input.cursor_py = _input.last_cursor_py = center_y;
+            POINT pt = {center_x, center_y};
+            ClientToScreen(window, &pt);
+            SetCursorPos(pt.x, pt.y);
+            // https://github.com/libsdl-org/SDL/blob/38e3c6a4aa338d062ca2eba80728bfdf319f7104/src/video/windows/SDL_windowsmouse.c#L319
+            // SetCursorPos(pt.x + 1, pt.y);
+            // SetCursorPos(pt.x, pt.y);
         }
 
         LARGE_INTEGER end_counter = win32_get_wall_clock();
