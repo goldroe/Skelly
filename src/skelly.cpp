@@ -131,22 +131,28 @@ LRESULT CALLBACK
 window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
     switch (Msg) {
-    case WM_CAPTURECHANGED:
-    {
-        // TODO: Stop focus on change of window capture
+    case WM_ACTIVATE: {
+        bool active = wParam > 0;
+        if (active) {
+            _input.capture_cursor = true;
+        } else {
+            _input.capture_cursor = false;
+        }
         break;
     }
-        
+       
     case WM_MOUSEMOVE:
     {
         int px = GET_X_LPARAM(lParam);
         int py = GET_Y_LPARAM(lParam);
-        _input.last_cursor_px = _input.cursor_px;
-        _input.last_cursor_py = _input.cursor_py;
-        _input.cursor_px = px;
-        _input.cursor_py = py;
-        _input.delta_x = _input.cursor_px - _input.last_cursor_px;
-        _input.delta_y = _input.cursor_py - _input.last_cursor_py;
+        if (_input.capture_cursor) {
+            _input.last_cursor_px = _input.cursor_px;
+            _input.last_cursor_py = _input.cursor_py;
+            _input.cursor_px = px;
+            _input.cursor_py = py;
+            _input.delta_x = _input.cursor_px - _input.last_cursor_px;
+            _input.delta_y = _input.cursor_py - _input.last_cursor_py;
+        }
         break;
     }
 
@@ -823,6 +829,7 @@ int main() {
     }
 
     // NOTE: initialize cursor
+    _input.capture_cursor = true;
     ShowCursor(FALSE);
     {
         POINT pt;
@@ -1161,9 +1168,9 @@ int main() {
         swapchain->Present(0, 0);
 
         input_reset_keys_pressed();
-        {
-            _input.delta_x = 0;
-            _input.delta_y = 0;
+        _input.delta_x = 0;
+        _input.delta_y = 0;
+        if (_input.capture_cursor) {
             int w, h;
             win32_get_window_dim(window, &w, &h);
             int center_x = w / 2;

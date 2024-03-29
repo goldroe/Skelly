@@ -2,6 +2,7 @@
 #define INPUT_H
 
 struct Input {
+    bool capture_cursor;
     int cursor_px, cursor_py;
     int last_cursor_px, last_cursor_py;
     int delta_x, delta_y;
