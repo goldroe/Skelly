@@ -49,15 +49,17 @@ typedef double f64;
 #include <stb_image.h>
 #pragma warning(pop)
 
-#define WIDTH 1600
-#define HEIGHT 900
-
 #define HANDMADE_MATH_USE_DEGREES
 #include "HandmadeMath.h"
 
 #include "skelly.h"
 
+#include "input.cpp"
+
 #define CLAMP(V, Min, Max) ((V) < (Min) ? (Min) : (V) > (Max) ? (Max) : (V))
+
+#define WIDTH 1600
+#define HEIGHT 900
 
 global bool window_should_close;
 
@@ -69,7 +71,8 @@ global ID3D11RenderTargetView *render_target;
 global LARGE_INTEGER global_clock_start;
 global LARGE_INTEGER performance_frequency;
 
-#include "input.cpp"
+
+global Assimp::Importer assimp_importer;
 
 internal void
 win32_set_start_clock(LARGE_INTEGER start) {
@@ -128,7 +131,14 @@ LRESULT CALLBACK
 window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
     switch (Msg) {
-    case WM_MOUSEMOVE: {
+    case WM_CAPTURECHANGED:
+    {
+        // TODO: Stop focus on change of window capture
+        break;
+    }
+        
+    case WM_MOUSEMOVE:
+    {
         int px = GET_X_LPARAM(lParam);
         int py = GET_Y_LPARAM(lParam);
         _input.last_cursor_px = _input.cursor_px;
@@ -332,11 +342,10 @@ get_parent_path(std::string file_name) {
 
 internal Basic_Model
 load_basic_model(std::string file_name) {
-    Assimp::Importer importer;
     u32 import_flags = aiProcess_Triangulate | aiProcess_FlipUVs;
-    const aiScene *scene = importer.ReadFile(file_name.data(), import_flags);
+    const aiScene *scene = assimp_importer.ReadFile(file_name.data(), import_flags);
     if (!scene) {
-        fprintf(stderr, "Failed to load mesh %s: %s\n", file_name.data(), importer.GetErrorString());
+        fprintf(stderr, "Failed to load mesh %s: %s\n", file_name.data(), assimp_importer.GetErrorString());
     }
     std::string model_path = get_parent_path(file_name);
 
@@ -413,7 +422,7 @@ load_basic_model(std::string file_name) {
 
 
 internal void
-set_bone_weight(Skinned_Vertex *vertex, s32 bone_id, f32 bone_weight) {
+set_vertex_bone_data(Skinned_Vertex *vertex, s32 bone_id, f32 bone_weight) {
     for (int i = 0; i < MAX_BONE_WEIGHTS; i++) {
         if (vertex->bone_ids[i] == -1) {
             vertex->bone_ids[i] = bone_id;
@@ -434,51 +443,122 @@ convert_assimp_matrix(aiMatrix4x4 m) {
 }
 
 internal HMM_Vec3
-convert_assimp_vec3(aiVector3D v) {
+convert_assimp_v3(aiVector3D v) {
     HMM_Vec3 V;
     V.X = v.x;
     V.Y = v.y;
     V.Z = v.z;
     return V;
-} 
+}
+
+internal HMM_Quat
+convert_assimp_quat(aiQuaternion q) {
+    HMM_Quat Q;
+    Q.X = (float)q.x;
+    Q.Y = (float)q.y;
+    Q.Z = (float)q.z;
+    Q.W = (float)q.w;
+    return Q;
+}
+
+internal Bone
+bone_create(std::string name, int id, aiNodeAnim *channel) {
+    Bone bone;
+    bone.name = name;
+    bone.id = id;
+    bone.local_transform = HMM_M4D(1.0f);
+
+    for (u32 key_index = 0; key_index < channel->mNumPositionKeys; key_index++) {
+        Key_Vector key;
+        key.time = (f32)channel->mPositionKeys[key_index].mTime;
+        key.value = convert_assimp_v3(channel->mPositionKeys[key_index].mValue);
+        bone.translation_keys.push_back(key);
+    }
+    bone.translation_count = channel->mNumPositionKeys;
+    
+    for (u32 key_index = 0; key_index < channel->mNumScalingKeys; key_index++) {
+        Key_Vector key;
+        key.time = (f32)channel->mScalingKeys[key_index].mTime;
+        key.value = convert_assimp_v3(channel->mScalingKeys[key_index].mValue);
+        bone.scale_keys.push_back(key);
+    }
+    bone.scale_count = channel->mNumScalingKeys;
+
+    for (u32 key_index = 0; key_index < channel->mNumRotationKeys; key_index++) {
+        Key_Quat key;
+        key.time = (f32)channel->mRotationKeys[key_index].mTime;
+        key.value = convert_assimp_quat(channel->mRotationKeys[key_index].mValue);
+        bone.rotation_keys.push_back(key);
+    }
+    bone.rotation_count = channel->mNumRotationKeys;
+
+    return bone;
+}
+
+
+internal void
+read_animation_node(Animation_Node *anim_node, aiNode *node) {
+    anim_node->name = node->mName.data;
+    anim_node->transform = convert_assimp_matrix(node->mTransformation);
+    for (u32 i = 0; i < node->mNumChildren; i++) {
+        Animation_Node child;
+        read_animation_node(&child, node->mChildren[i]);
+        anim_node->children.push_back(child);
+    }
+    anim_node->children_count = node->mNumChildren;
+}
+
+internal Animator
+animator_create(Animation *animation) {
+    Animator animator;
+    animator.time = 0.0f;
+    animator.animation = animation;
+    animator.final_bone_matrices.reserve(MAX_BONES);
+    HMM_Mat4 m = HMM_M4D(1.0f);
+    for (int i = 0; i < MAX_BONES; i++) {
+        animator.final_bone_matrices.push_back(m);
+    }
+    return animator;
+}
 
 internal Animation
-load_animation(std::string file_name) {
-    Assimp::Importer importer;
+load_animation(std::string file_name, Skinned_Model *model) {
     u32 import_flags = aiProcess_Triangulate | aiProcess_FlipUVs;
-    const aiScene *scene = importer.ReadFile(file_name.data(), import_flags);
+    const aiScene *scene = assimp_importer.ReadFile(file_name.data(), import_flags);
     if (!scene) {
-        fprintf(stderr, "Failed to load animation %s: %s\n", file_name.data(), importer.GetErrorString());
+        fprintf(stderr, "Failed to load animation %s: %s\n", file_name.data(), assimp_importer.GetErrorString());
     }
+
     Animation animation{};
+
     if (!scene->HasAnimations()) {
-        fprintf(stderr, "File has no animations %s: %s\n", file_name.data(), importer.GetErrorString());
+        fprintf(stderr, "File has no animations %s: %s\n", file_name.data(), assimp_importer.GetErrorString());
         return animation;
     }
 
     aiAnimation *ai_anim = scene->mAnimations[0];
+
     animation.name = ai_anim->mName.C_Str();
     animation.duration = (f32)ai_anim->mDuration;
     animation.ticks_per_second = (f32)ai_anim->mTicksPerSecond;
 
     for (u32 channel_index = 0; channel_index < ai_anim->mNumChannels; channel_index++) {
         aiNodeAnim *channel = ai_anim->mChannels[channel_index];
-        Bone *bone = nullptr; // find_bone(model, channel->mNodeName);
-        if (bone) {
-            for (u32 key_index = 0; key_index < channel->mNumPositionKeys; key_index++) {
-                KeyVector key;
-                key.time = (f32)channel->mPositionKeys[key_index].mTime;
-                key.value = convert_assimp_vec3(channel->mPositionKeys[key_index].mValue);
-                bone->translation_keys.push_back(key);
-            }
-            for (u32 key_index = 0; key_index < channel->mNumScalingKeys; key_index++) {
-                KeyVector key;
-                key.time = (f32)channel->mScalingKeys[key_index].mTime;
-                key.value = convert_assimp_vec3(channel->mScalingKeys[key_index].mValue);
-                bone->scaling_keys.push_back(key);
-            }
+        std::string node_name = channel->mNodeName.data;
+
+        if (model->bone_info_map.find(node_name) == model->bone_info_map.end()) {
+            Bone_Info info{};
+            info.id = model->bone_counter;
+            model->bone_info_map.insert({node_name, info});
         }
+
+        Bone bone = bone_create(node_name, model->bone_info_map[node_name].id, channel);
+        animation.bones.push_back(bone);
     }
+
+    read_animation_node(&animation.node, scene->mRootNode);
+
+    animation.bone_info_map = model->bone_info_map;
     
     return animation;
 }
@@ -516,16 +596,26 @@ load_skinned_model(std::string file_name) {
         }
 
         // NOTE: Load bone data
-        assert(ai_mesh->mNumBones <= MAX_BONES);
         for (u32 bone_index = 0; bone_index < ai_mesh->mNumBones; bone_index++) {
             aiBone *bone = ai_mesh->mBones[bone_index];
+            std::string bone_name = bone->mName.C_Str();
+            int bone_id = -1;
+            if (model.bone_info_map.find(bone_name) != model.bone_info_map.end()) {
+                bone_id = model.bone_info_map[bone_name].id;
+            } else {
+                Bone_Info bone_info;
+                bone_id = bone_info.id = model.bone_counter;
+                bone_info.offset_matrix = convert_assimp_matrix(bone->mOffsetMatrix);
+                model.bone_info_map.insert({bone_name, bone_info});
+                model.bone_counter++;
+            }
+
+            assert(bone_id != -1);
             for (u32 weight_index = 0; weight_index < bone->mNumWeights; weight_index++) {
                 aiVertexWeight ai_weight = bone->mWeights[weight_index];
                 Skinned_Vertex *vertex = &mesh.vertices[ai_weight.mVertexId];
-                set_bone_weight(vertex, bone_index, ai_weight.mWeight);
+                set_vertex_bone_data(vertex, bone_id, ai_weight.mWeight);
             }
-            HMM_Mat4 offset_matrix = convert_assimp_matrix(bone->mOffsetMatrix);
-            model.bone_matrices[bone_index] = offset_matrix;
         }
 
         for (u32 i = 0; i < ai_mesh->mNumFaces; i++) {
@@ -577,6 +667,127 @@ load_skinned_model(std::string file_name) {
         model.meshes.push_back(mesh);
     }
     return model; 
+}
+
+internal f32
+compute_bone_lerp_factor(f32 time, f32 last_time, f32 next_time) {
+    f32 result = (time - last_time) / (next_time - last_time);
+    return result;
+}
+
+internal int
+bone_get_translation_key(Bone *bone, f32 time) {
+    for (int key_index = 0; key_index < bone->translation_count - 1; key_index++) {
+        if (bone->translation_keys[key_index].time <= time && time <= bone->translation_keys[key_index + 1].time) {
+            return key_index;
+        }
+    }
+    return 0;
+}
+
+internal int
+bone_get_scale_key(Bone *bone, f32 time) {
+    for (int key_index = 0; key_index < bone->scale_count - 1; key_index++) {
+        if (bone->scale_keys[key_index].time <= time && time <= bone->scale_keys[key_index + 1].time) {
+            return key_index;
+        }
+    }
+    return 0;
+}
+
+internal int
+bone_get_rotation_key(Bone *bone, f32 time) {
+    for (int key_index = 0; key_index < bone->rotation_count - 1; key_index++) {
+        if (bone->rotation_keys[key_index].time <= time && time <= bone->rotation_keys[key_index + 1].time) {
+            return key_index;
+        }
+    }
+    return 0;
+}
+
+internal HMM_Mat4
+bone_lerp_translation(Bone *bone, f32 time) {
+    int key = bone_get_translation_key(bone, time);
+    Key_Vector last_key = bone->translation_keys[key];
+    Key_Vector next_key = bone->translation_keys[key + 1];
+
+    f32 lerp_factor = compute_bone_lerp_factor(time, last_key.time, next_key.time);
+    HMM_Vec3 lerp_vector = HMM_LerpV3(last_key.value, lerp_factor, next_key.value);
+    HMM_Mat4 T = HMM_Translate(lerp_vector);
+    return T;
+}
+
+internal HMM_Mat4
+bone_lerp_scale(Bone *bone, f32 time) {
+    int key = bone_get_scale_key(bone, time);
+    Key_Vector last_key = bone->scale_keys[key];
+    Key_Vector next_key = bone->scale_keys[key + 1];
+
+    f32 lerp_factor = compute_bone_lerp_factor(time, last_key.time, next_key.time);
+    HMM_Vec3 lerp_vector = HMM_LerpV3(last_key.value, lerp_factor, next_key.value);
+    HMM_Mat4 S = HMM_Scale(lerp_vector);
+    return S;
+}
+
+internal HMM_Mat4
+bone_lerp_rotation(Bone *bone, f32 time) {
+    int key = bone_get_rotation_key(bone, time);
+    Key_Quat last_key = bone->rotation_keys[key];
+    Key_Quat next_key = bone->rotation_keys[key + 1];
+
+    f32 slerp_factor = compute_bone_lerp_factor(time, last_key.time, next_key.time);
+    HMM_Quat slerp_quat = HMM_SLerp(last_key.value, slerp_factor, next_key.value);
+    HMM_Mat4 R = HMM_QToM4(slerp_quat);
+    return R;
+}
+
+internal void
+bone_update(Bone *bone, f32 time) {
+    HMM_Mat4 translation = bone_lerp_translation(bone, time);
+    HMM_Mat4 scale = bone_lerp_scale(bone, time);
+    HMM_Mat4 rotation = bone_lerp_rotation(bone, time);
+    bone->local_transform = translation * scale * rotation;
+}
+
+internal Bone *
+find_bone(Animation *animation, std::string name) {
+    for (int i = 0; i < animation->bones.size(); i++) {
+        if (animation->bones[i].name == name) {
+            return &animation->bones[i];
+        }
+    }
+    return nullptr;
+}
+
+internal void
+compute_bone_transform(Animator *animator, Animation_Node *node, HMM_Mat4 parent_transform) {
+    HMM_Mat4 node_transform = node->transform;
+    
+    Bone *bone = find_bone(animator->animation, node->name);
+    if (bone) {
+        bone_update(bone, animator->time);
+        node_transform = bone->local_transform;
+    }
+
+    HMM_Mat4 global_transform = parent_transform * node_transform;
+
+    Animation *animation = animator->animation;
+    if (animation->bone_info_map.find(node->name) != animation->bone_info_map.end()) {
+        Bone_Info bone_info = animation->bone_info_map[node->name];
+        animator->final_bone_matrices[bone_info.id] = global_transform * bone_info.offset_matrix;
+    }
+
+    for (int i = 0; i < node->children_count; i++) {
+        compute_bone_transform(animator, &node->children[i], global_transform);
+    }
+}
+
+internal void
+animation_update(Animator *animator, f32 dt) {
+    Animation *animation = animator->animation;
+    animator->time += animation->ticks_per_second * dt;
+    animator->time = fmod(animator->time, animation->duration);
+    compute_bone_transform(animator, &animation->node, HMM_M4D(1.0f));
 }
 
 int main() {
@@ -761,6 +972,8 @@ int main() {
     load_texture("data/white.png", &white_texture);
 
     Skinned_Model model = load_skinned_model("data/Vampire/dancing_vampire.dae");
+    Animation animation = load_animation("data/Vampire/dancing_vampire.dae", &model);
+    Animator animator = animator_create(&animation);
 
     Camera camera{};
     camera.position = HMM_V3(0.0f, 0.0f, 3.0f);
@@ -773,14 +986,14 @@ int main() {
     
     model.material.color = HMM_V4(0.8f, 0.5f, 0.3f, 1.0f);
     model.material.ambient = HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
-    model.material.diffuse =  HMM_V4(0.4f, 0.4f, 0.4f, 1.0f);
-    model.material.specular = HMM_V4(0.3f, 0.3f, 0.3f, 32.0f);
+    model.material.diffuse =  HMM_V4(0.6f, 0.6f, 0.6f, 1.0f);
+    model.material.specular = HMM_V4(1.0f, 1.0f, 1.0f, 128.0f);
 
     Directional_Light directional_light{};
-    directional_light.ambient = HMM_V4(0.3f, 0.3f, 0.3f, 1.0f);
+    directional_light.ambient = HMM_V4(0.6f, 0.6f, 0.6f, 1.0f);
     directional_light.diffuse = HMM_V4(0.45f, 0.45f, 0.45f, 1.0f);
     directional_light.specular = HMM_V4(0.6f, 0.6f, 0.6f, 1.0f);
-    directional_light.direction = HMM_V3(0.0f, 1.0f, 0.0f);
+    directional_light.direction = HMM_V3(0.0f, 0.0f, -1.0f);
 
     f32 animation_time = 0.0f;
 
@@ -838,12 +1051,11 @@ int main() {
         }
 
         {
+            f32 rotation_dp = 10.0f;
             // Rotate around Y-axis
-            f32 yaw_dt = 100.0f * cursor_delta.X * delta_t;
-            f32 pitch_dt = 100.0f * cursor_delta.Y * delta_t;
-            camera.yaw += yaw_dt;
-            camera.pitch -= pitch_dt;
-
+            camera.yaw   += rotation_dp * cursor_delta.X * delta_t;
+            camera.yaw = fmod(camera.yaw, 360.0f);
+            camera.pitch -= rotation_dp * cursor_delta.Y * delta_t;
             camera.pitch = CLAMP(camera.pitch, -89.0f, 89.0f);
             
             HMM_Vec3 dir{};
@@ -863,14 +1075,23 @@ int main() {
             camera_speed *= 0.1f;
         }
 
-        camera.position += camera.forward * forward_dt * camera_speed;
-        camera.position += camera.right * right_dt * camera_speed;
+        HMM_Vec3 distance{};
+        distance += camera.forward * forward_dt;
+        distance += camera.right * right_dt;
+        if (HMM_LenV3(distance) > 0.0f) {
+            HMM_Vec3 move_dir = HMM_NormV3(distance);
+            camera.position += move_dir * camera_speed * delta_t;
+        }
 
         camera.view_matrix = HMM_LookAt_RH(camera.position, camera.position + camera.forward, camera.up);
 
         // NOTE: Light direction moves circularly
-        f32 t = 45.0f * win32_get_current_time();
-        directional_light.direction = HMM_Norm(HMM_V3(HMM_CosF(t), 0.0f, HMM_SinF(t)));
+        // f32 t = 45.0f * win32_get_current_time();
+        // directional_light.direction = HMM_Norm(HMM_V3(HMM_CosF(t), 0.0f, HMM_SinF(t)));
+
+        directional_light.direction = camera.forward;
+
+        animation_update(&animator, delta_t);
 
         // RENDER
         float bg_color[4] = {};
@@ -905,7 +1126,7 @@ int main() {
         skinned_per_obj.world = HMM_M4D(1.0f);
         skinned_per_obj.world_inv_transpose = HMM_Transpose(HMM_InvGeneral(skinned_per_obj.world));
         skinned_per_obj.wvp = wvp;
-        memcpy(skinned_per_obj.bone_matrices, model.bone_matrices, MAX_BONES * sizeof(HMM_Mat4));
+        memcpy(skinned_per_obj.bone_matrices, animator.final_bone_matrices.data(), animator.final_bone_matrices.size() * sizeof(HMM_Mat4));
         skinned_per_obj.material = model.material;
         upload_constants(shader_skinned.per_obj, &skinned_per_obj, sizeof(Skinned_Constants_Per_Obj));
 

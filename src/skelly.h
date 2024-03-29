@@ -1,6 +1,9 @@
 #ifndef SKELLY_H
 #define SKELLY_H
 
+#include <vector>
+#include <map>
+
 struct Camera {
     HMM_Vec3 position;
 
@@ -115,30 +118,66 @@ struct Skinned_Mesh {
     Texture texture;
 };
 
-struct Skinned_Model {
-    std::vector<Skinned_Mesh> meshes;
-    HMM_Mat4 bone_matrices[MAX_BONES];
-    Material material;
+struct Bone_Info {
+    int id;
+    HMM_Mat4 offset_matrix;
 };
 
-struct KeyVector {
+struct Key_Vector {
     f32 time;
     HMM_Vec3 value;
 };
 
+struct Key_Quat {
+    f32 time;
+    HMM_Quat value;
+};
+
 struct Bone {
     std::string name;
-    std::vector<KeyVector> translation_keys;
-    std::vector<KeyVector> scaling_keys;
+    int id;
+
+    std::vector<Key_Vector> translation_keys;
+    std::vector<Key_Vector> scale_keys;
+    std::vector<Key_Quat>   rotation_keys;
+
+    int translation_count;
+    int scale_count;
+    int rotation_count;
+
     HMM_Mat4 local_transform;
+};
+
+struct Skinned_Model {
+    std::vector<Skinned_Mesh> meshes;
+    Material material;
+
+    std::map<std::string, Bone_Info> bone_info_map;
+    int bone_counter;
+};
+
+struct Animation_Node {
+    std::string name;
+    HMM_Mat4 transform;
+    int children_count;
+    std::vector<Animation_Node> children;
 };
 
 struct Animation {
     std::string name;
     f32 duration;
     f32 ticks_per_second;
-    
+
     std::vector<Bone> bones;
+    Animation_Node node;
+
+    std::map<std::string, Bone_Info> bone_info_map;
+};
+
+struct Animator {
+    f32 time;
+    Animation *animation;
+    std::vector<HMM_Mat4> final_bone_matrices;
 };
 
 #endif SKELLY_H
