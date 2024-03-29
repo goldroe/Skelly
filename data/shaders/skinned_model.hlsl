@@ -42,6 +42,7 @@ Vertex_Out vs_main(Vertex_In vin) {
         if (vin.bone_indices[i] == -1) continue;
         if (vin.bone_indices[i] >= MAX_BONES) {
             pos_l = float4(vin.pos_l, 1.0);
+            normal_l = vin.normal_l;
             break;
         }
 
