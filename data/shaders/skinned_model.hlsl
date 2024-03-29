@@ -37,6 +37,7 @@ Texture2D texture_diffuse;
 Vertex_Out vs_main(Vertex_In vin) {
     Vertex_Out vout;
     float4 pos_l = float4(0, 0, 0, 0);
+    float3 normal_l = float3(0, 0, 0);
     for (int i = 0; i < MAX_WEIGHTS; i++) {
         if (vin.bone_indices[i] == -1) continue;
         if (vin.bone_indices[i] >= MAX_BONES) {
@@ -44,11 +45,12 @@ Vertex_Out vs_main(Vertex_In vin) {
             break;
         }
 
+        normal_l += vin.weights[i] * mul((float3x3)bone_matrices[vin.bone_indices[i]], vin.normal_l);
         pos_l += vin.weights[i] * mul(bone_matrices[vin.bone_indices[i]], float4(vin.pos_l, 1.0));
     }
     vout.pos_w = mul(world, pos_l).xyz;
     vout.pos_h = mul(wvp, pos_l);
-    vout.normal_w = mul(world_inv_transpose, float4(vin.normal_l, 1.0)).xyz;
+    vout.normal_w = mul((float3x3)world_inv_transpose, normal_l);
     vout.uv = vin.uv;
     return vout;
 }
