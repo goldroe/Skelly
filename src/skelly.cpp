@@ -616,7 +616,6 @@ load_skinned_model(std::string file_name) {
                 model.bone_counter++;
             }
 
-            assert(bone_id != -1);
             for (u32 weight_index = 0; weight_index < bone->mNumWeights; weight_index++) {
                 aiVertexWeight ai_weight = bone->mWeights[weight_index];
                 Skinned_Vertex *vertex = &mesh.vertices[ai_weight.mVertexId];
@@ -780,7 +779,10 @@ compute_bone_transform(Animator *animator, Animation_Node *node, HMM_Mat4 parent
     Animation *animation = animator->animation;
     if (animation->bone_info_map.find(node->name) != animation->bone_info_map.end()) {
         Bone_Info bone_info = animation->bone_info_map[node->name];
-        animator->final_bone_matrices[bone_info.id] = global_transform * bone_info.offset_matrix;
+        // NOTE: Only update final matrices of limited bones
+        if (bone_info.id < MAX_BONES) {
+            animator->final_bone_matrices[bone_info.id] = global_transform * bone_info.offset_matrix;
+        }
     }
 
     for (int i = 0; i < node->children_count; i++) {
@@ -978,8 +980,8 @@ int main() {
     Texture white_texture;
     load_texture("data/white.png", &white_texture);
 
-    Skinned_Model model = load_skinned_model("data/Vampire/dancing_vampire.dae");
-    Animation animation = load_animation("data/Vampire/dancing_vampire.dae", &model);
+    Skinned_Model model = load_skinned_model("data/vampire/dancing_vampire.dae");
+    Animation animation = load_animation("data/vampire/dancing_Vampire.dae", &model);
     Animator animator = animator_create(&animation);
 
     Camera camera{};
@@ -1133,7 +1135,7 @@ int main() {
         skinned_per_obj.world = HMM_M4D(1.0f);
         skinned_per_obj.world_inv_transpose = HMM_Transpose(HMM_InvGeneral(skinned_per_obj.world));
         skinned_per_obj.wvp = wvp;
-        memcpy(skinned_per_obj.bone_matrices, animator.final_bone_matrices.data(), animator.final_bone_matrices.size() * sizeof(HMM_Mat4));
+        memcpy(skinned_per_obj.bone_matrices, animator.final_bone_matrices.data(), MAX_BONES * sizeof(HMM_Mat4));
         skinned_per_obj.material = model.material;
         upload_constants(shader_skinned.per_obj, &skinned_per_obj, sizeof(Skinned_Constants_Per_Obj));
 
